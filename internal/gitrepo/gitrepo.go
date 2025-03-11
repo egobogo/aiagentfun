@@ -14,18 +14,43 @@ import (
 
 // GitClient wraps a Git repository.
 type GitClient struct {
+	RepoURL    string
 	RepoPath   string
 	Repository *git.Repository
 }
 
-// NewGitClient opens the Git repository located at repoPath.
-func NewGitClient(repoPath string) (*GitClient, error) {
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %v", err)
+// WriteFile writes content to a file (relative to RepoPath) with the given permissions.
+func (gc *GitClient) WriteFile(fileName string, content []byte) error {
+	fullPath := gc.RepoPath + "/" + fileName
+	return os.WriteFile(fullPath, content, 0644)
+}
+
+// NewGitClient creates a new GitClient by cloning the repository from repoURL
+// into localPath if it does not exist, or by opening it if it already exists.
+func NewGitClient(repoURL, localPath string) (*GitClient, error) {
+	var repo *git.Repository
+
+	// Check if the repository directory exists.
+	if _, err := os.Stat(localPath); os.IsNotExist(err) {
+		// Clone the repository from repoURL.
+		fmt.Println("Local repository not found. Cloning from remote...")
+		repo, err = git.PlainClone(localPath, false, &git.CloneOptions{
+			URL: repoURL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to clone repository: %w", err)
+		}
+	} else {
+		// Open the existing repository.
+		repo, err = git.PlainOpen(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open repository: %w", err)
+		}
 	}
+
 	return &GitClient{
-		RepoPath:   repoPath,
+		RepoURL:    repoURL,
+		RepoPath:   localPath,
 		Repository: repo,
 	}, nil
 }

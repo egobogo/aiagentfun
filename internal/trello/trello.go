@@ -1,46 +1,172 @@
 // internal/trello/trello.go
-
 package trello
 
 import (
-	"github.com/adlio/trello"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
+
+	adlio "github.com/adlio/trello"
 )
 
-// TrelloClient is a small wrapper around adlio/trello.Client
+// For convenience, alias the adlio.Card type.
+type Card = adlio.Card
+
+func WrapCard(card *Card) *MyCard {
+	return &MyCard{Card: card}
+}
+
+// MyCard wraps *Card to add helper methods.
+type MyCard struct {
+	*Card
+}
+
+// Move moves the card to a new list by updating the "idList" field.
+func (mc *MyCard) Move(newListID string) error {
+	// Update the card's list by passing a map of parameters.
+	args := map[string]string{
+		"idList": newListID,
+	}
+	// Update is a method on adlio.Card.
+	return mc.Update(args)
+}
+
+// AssignMember updates the card's assigned member(s) by setting "idMembers".
+// Here we simply overwrite with the new member.
+func (mc *MyCard) AssignMember(memberID string) error {
+	args := map[string]string{
+		"idMembers": memberID,
+	}
+	return mc.Update(args)
+}
+
+// PostComment posts a comment to the card using the Trello REST API.
+func (mc *MyCard) PostComment(comment string, tc *TrelloClient) error {
+	endpoint := fmt.Sprintf("https://api.trello.com/1/cards/%s/actions/comments", mc.ID)
+	data := url.Values{}
+	data.Set("text", comment)
+	data.Set("key", tc.APIKey)
+	data.Set("token", tc.Token)
+
+	resp, err := http.PostForm(endpoint, data)
+	if err != nil {
+		return fmt.Errorf("failed to post comment: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to post comment, status: %d, response: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// AddComment posts a comment on the card using the Trello REST API.
+// Note: We require a TrelloClient to supply APIKey and Token.
+func (mc *MyCard) AddComment(comment string, tc *TrelloClient) error {
+	endpoint := fmt.Sprintf("https://api.trello.com/1/cards/%s/actions/comments", mc.ID)
+	data := url.Values{}
+	data.Set("text", comment)
+	data.Set("key", tc.APIKey)
+	data.Set("token", tc.Token)
+
+	resp, err := http.PostForm(endpoint, data)
+	if err != nil {
+		return fmt.Errorf("failed to post comment: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to post comment, status: %d, response: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// GetComments retrieves comments from the card using the TrelloClient.
+func (mc *MyCard) GetComments(tc *TrelloClient) ([]string, error) {
+	endpoint := fmt.Sprintf("https://api.trello.com/1/cards/%s/actions?filter=commentCard&key=%s&token=%s", mc.ID, tc.APIKey, tc.Token)
+	resp, err := http.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get comments: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get comments, status: %d, response: %s", resp.StatusCode, string(body))
+	}
+	var actions []struct {
+		Data struct {
+			Text string `json:"text"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&actions); err != nil {
+		return nil, fmt.Errorf("failed to decode comments: %w", err)
+	}
+	var comments []string
+	for _, action := range actions {
+		comments = append(comments, action.Data.Text)
+	}
+	return comments, nil
+}
+
+// TrelloClient wraps the adlio/trello Client and holds credentials.
 type TrelloClient struct {
-	client  *trello.Client
+	Client  *adlio.Client
+	APIKey  string
+	Token   string
 	BoardID string
 }
 
-// NewTrelloClient creates a new Trello client using the provided API key and token
+// NewTrelloClient
 func NewTrelloClient(apiKey, token, boardID string) *TrelloClient {
+	client := adlio.NewClient(apiKey, token)
 	return &TrelloClient{
-		client:  trello.NewClient(apiKey, token),
+		Client:  client,
+		APIKey:  apiKey,
+		Token:   token,
 		BoardID: boardID,
 	}
 }
 
-// GetBoard fetches a board by its shortLink or ID
-func (tc *TrelloClient) GetBoard() (*trello.Board, error) {
-	return tc.client.GetBoard(tc.BoardID, nil)
+// GetBoard retrieves the board by its BoardID.
+func (tc *TrelloClient) GetBoard() (*adlio.Board, error) {
+	return tc.Client.GetBoard(tc.BoardID, adlio.Defaults())
 }
 
-// GetMember retrieves a Trello member (user) by username, member ID, or email
-func (tc *TrelloClient) GetMember(usernameOrID string) (*trello.Member, error) {
-	return tc.client.GetMember(usernameOrID, nil)
-}
-
-// GetBoardLists returns all Trello lists (columns) from a given board
-func (tc *TrelloClient) GetBoardLists() ([]*trello.List, error) {
-	board, err := tc.client.GetBoard(tc.BoardID, nil)
+// GetBoardLists returns the lists on the board.
+func (tc *TrelloClient) GetBoardLists() ([]*adlio.List, error) {
+	board, err := tc.GetBoard()
 	if err != nil {
 		return nil, err
 	}
-	lists, err := board.GetLists(nil)
-	if err != nil {
-		return nil, err
-	}
-	return lists, nil
+	return board.GetLists(adlio.Defaults())
 }
 
-// (Add more methods as needed, e.g. GetLists, CreateCard, etc.)
+// CreateCard creates a new card with the given title and description in the specified list.
+func (tc *TrelloClient) CreateCard(title, description, listID string) (*adlio.Card, error) {
+	card := &adlio.Card{
+		Name: title,
+		Desc: description,
+	}
+	// Pass the card and an Arguments map with the list ID.
+	err := tc.Client.CreateCard(card, adlio.Arguments{"idList": listID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create card: %w", err)
+	}
+	return card, nil
+}
+
+// GetDoneListID searches the board lists for one named "Done" and returns its ID.
+func (tc *TrelloClient) GetDoneListID() (string, error) {
+	lists, err := tc.GetBoardLists()
+	if err != nil {
+		return "", err
+	}
+	for _, list := range lists {
+		if list.Name == "Done" {
+			return list.ID, nil
+		}
+	}
+	return "", fmt.Errorf("Done list not found")
+}
