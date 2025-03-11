@@ -29,20 +29,28 @@ func main() {
 		log.Fatalf("Error creating Git client: %v", err)
 	}
 	// Initialize ChatGPT client using the chosen model.
-	gptClient := chatgpt.NewChatGPTClient("o3-mini-high")
+	gptClient := chatgpt.NewChatGPTClient("gpt-4o-mini")
 
+	// egobogoBackendDevAgent@gmail.com
 	// Create the base agent.
 	log.Println("creating agents")
-	baseAgent := &agent.AIAgent{
-		Name:         "engManagerAgent", // For the engineering manager
+	baseEngAgent := &agent.AIAgent{
+		Name:         "egobogoengmanageragent", // For the engineering manager
+		TrelloClient: trelloClient,
+		GitClient:    gitClient,
+		GPTClient:    gptClient,
+	}
+
+	baseDevAgent := &agent.AIAgent{
+		Name:         "egobogobackenddevagent", // For the backend developer
 		TrelloClient: trelloClient,
 		GitClient:    gitClient,
 		GPTClient:    gptClient,
 	}
 
 	// Create specialized agents using predefined role configurations.
-	engManagerAgent := agent.NewEngineeringManagerAIAgent(baseAgent, roles.Manager.SystemMessage)
-	backendAgent := agent.NewBackendDeveloperAIAgent(baseAgent, roles.Backend.SystemMessage)
+	engManagerAgent := agent.NewEngineeringManagerAIAgent(baseEngAgent, roles.Manager.SystemMessage)
+	backendAgent := agent.NewBackendDeveloperAIAgent(baseDevAgent, roles.Backend.SystemMessage)
 
 	// Main event loop: poll for new tickets and process them.
 	log.Println("starting main loop")

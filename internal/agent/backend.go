@@ -69,7 +69,7 @@ func (b *BackendDeveloperAIAgent) CommitAndPushTicketResult(ticket *trello.Card,
 // CloseTicket moves the ticket to the Done column and reassigns it.
 func (b *BackendDeveloperAIAgent) CloseTicket(ticket *trello.Card, finalAssignee string) error {
 	// Get the ID for the Done column. (Assume TrelloClient has GetDoneListID.)
-	doneListID, err := b.TrelloClient.GetDoneListID()
+	doneListID, err := b.TrelloClient.GetListIDByName("Done")
 	if err != nil {
 		return fmt.Errorf("failed to get Done list ID: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -149,12 +150,32 @@ func (tc *TrelloClient) CreateCard(title, description, listID string) (*adlio.Ca
 		Name: title,
 		Desc: description,
 	}
+
+	log.Println(listID)
 	// Pass the card and an Arguments map with the list ID.
 	err := tc.Client.CreateCard(card, adlio.Arguments{"idList": listID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create card: %w", err)
 	}
 	return card, nil
+}
+
+// GetListIDByName searches the board lists for one with the given name and returns its ID.
+func (tc *TrelloClient) GetListIDByName(listName string) (string, error) {
+	board, err := tc.GetBoard()
+	if err != nil {
+		return "", fmt.Errorf("failed to get board: %w", err)
+	}
+	lists, err := board.GetLists(adlio.Defaults())
+	if err != nil {
+		return "", fmt.Errorf("failed to get board lists: %w", err)
+	}
+	for _, list := range lists {
+		if list.Name == listName {
+			return list.ID, nil
+		}
+	}
+	return "", fmt.Errorf("list '%s' not found", listName)
 }
 
 // GetDoneListID searches the board lists for one named "Done" and returns its ID.
@@ -169,4 +190,35 @@ func (tc *TrelloClient) GetDoneListID() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("Done list not found")
+}
+
+// GetMember retrieves a Trello member by their ID using the underlying client.
+func (tc *TrelloClient) GetMember(memberID string) (*adlio.Member, error) {
+	return tc.Client.GetMember(memberID, adlio.Defaults())
+}
+
+// GetMemberByName searches the board for a member whose Username matches the provided name.
+func (tc *TrelloClient) GetMemberByName(username string) (*adlio.Member, error) {
+	// First, get the board.
+	board, err := tc.GetBoard()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get board: %w", err)
+	}
+
+	// Get all members of the board.
+	// Assuming board.GetMembers returns []*adlio.Member. If not available, you may need to use another API call.
+	members, err := board.GetMembers(adlio.Defaults())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get board members: %w", err)
+	}
+
+	// Iterate through members and return the one that matches.
+	log.Println("here are our users")
+	for _, m := range members {
+		log.Println(m.Username)
+		if m.Username == username {
+			return m, nil
+		}
+	}
+	return nil, fmt.Errorf("member with username %s not found", username)
 }

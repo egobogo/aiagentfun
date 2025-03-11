@@ -22,8 +22,14 @@ type AIAgent struct {
 // TicketBelongsToMe checks if a Trello card is assigned to this agent.
 // (This is a simplistic check comparing agent's Name with each assigned member ID.)
 func (a *AIAgent) TicketBelongsToMe(card *trello.Card) bool {
+	// For each memberID on the card, fetch the member details.
 	for _, memberID := range card.IDMembers {
-		if strings.EqualFold(memberID, a.Name) {
+		member, err := a.TrelloClient.GetMember(memberID)
+		if err != nil {
+			continue // or log the error
+		}
+		// Compare the member's full name or username with the agent's name.
+		if strings.EqualFold(member.Username, a.Name) {
 			return true
 		}
 	}
