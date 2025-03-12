@@ -40,26 +40,14 @@ func NewEngineeringManagerAIAgent(base *AIAgent, instruction string) *Engineerin
 	}
 }
 
-// DecomposeTicket decomposes a ticket into atomic technical tasks.
-func (e *EngineeringManagerAIAgent) DecomposeTicket(ticket string) ([]string, error) {
-	prompt := fmt.Sprintf("%s\nDecompose the following ticket into atomic, actionable tasks:\n%s", e.Instruction, ticket)
-	response, err := e.GPTClient.Chat(prompt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decompose ticket: %w", err)
-	}
-	// For simplicity, assume each task is separated by a newline.
-	tasks := strings.Split(response, "\n")
-	return tasks, nil
-}
-
 // HandleTicket processes a ticket by generating clarifications based on Git context and ticket details,
 // posting them (tagging @bogoego), waiting for a reply that tags @egobogoengmanageragent,
 // and finally passing that reply to GPT.
-func (e *EngineeringManagerAIAgent) HandleTicket(card *trello.Card) error {
+func (e *EngineeringManagerAIAgent) HandleTicket(card *trello.Card) ([]*trello.Card, error) {
 	// 1. Scan and read the Git repository.
 	gitFiles, err := e.ReadAllGitFiles() // method defined in the base agent
 	if err != nil {
-		return fmt.Errorf("failed to read git repository: %w", err)
+		return nil, fmt.Errorf("failed to read git repository: %w", err)
 	}
 	// Build a simple summary of the repository.
 	var gitSummary strings.Builder
@@ -70,47 +58,107 @@ func (e *EngineeringManagerAIAgent) HandleTicket(card *trello.Card) error {
 	// 2. Pass the ticket details and git context to GPT to generate clarifications.
 	ticketInfo := fmt.Sprintf("Ticket ID: %s\nTitle: %s\nDescription: %s", card.ID, card.Name, card.Desc)
 	prompt := fmt.Sprintf(
-		"Given the following Git repository context:\n%s\nand the ticket:\n%s\nGenerate a list of clarifying questions.",
-		gitSummary.String(), ticketInfo,
-	)
+		"Given the following Git repository context: % sand the ticket details:%s\n"+
+			"You are the definitive technical authority for this project. You have complete expertise in all technical areas—choosing the best libraries, applying the most appropriate design patterns, and enforcing optimal coding standards and technical constraints. You already know what technical choices to make.\n"+
+			"Your sole responsibility here is to ensure that the ticket’s requirements are unambiguous from a business perspective. If you detect any ambiguity or lack of clarity regarding the business objectives or requirements in the ticket, ask a concise question to the Product Manager to clarify these aspects. Do not ask about technical details such as libraries, design patterns, coding standards, or technical constraints.\n"+
+			"Generate a list of clarifying questions that focus exclusively on any potential business ambiguities in the ticket. If the ticket is clear from a business standpoint, simply confirm that the task is technically sound.", gitSummary.String(), ticketInfo)
 	clarifications, err := e.GPTClient.Chat(prompt)
 	if err != nil {
-		return fmt.Errorf("failed to generate clarifications: %w", err)
+		return nil, fmt.Errorf("failed to generate clarifications: %w", err)
 	}
 
 	// 3. Post the generated clarifications as a comment, tagging @bogoego.
 	clarificationComment := clarifications + "\n@bogoego"
 	if err := e.WriteComment(card, clarificationComment); err != nil {
-		return fmt.Errorf("failed to post clarification comment: %w", err)
+		return nil, fmt.Errorf("failed to post clarification comment: %w", err)
 	}
 	log.Printf("Posted clarifications on ticket %s", card.ID)
 
 	// 4. Wait until a reply is posted that tags @egobogoengmanageragent.
-	reply, err := e.WaitForReply(card, "@egobogoengmanageragent")
+	reply, err := e.WaitForReply(card, "@"+e.Name)
 	if err != nil {
-		return fmt.Errorf("failed to receive reply: %w", err)
+		return nil, fmt.Errorf("failed to receive reply: %w", err)
 	}
 	log.Printf("Received reply: %s", reply)
 
 	// 5. Pass the reply to GPT for further processing.
-	prompt := fmt.Sprintf(
-		"Given the following clarifications, create tenchnical specification and split it into a list of atomic technical tasks. " +
-			"Each task should be clear and unambiguous, with a concise title.")
+	replyPrompt := fmt.Sprintf(
+		"Given the following clarifications, create tenchnical clear a list of atomic technical tickets for the backend developer with only coding tasks. Each task should be clear and unambiguous, with a concise title. Each task should start with a title followed by new line and then have a precise technical specification for the developer.  I want the response to ONLY have actionable tickets withno additional fields, no general questins or comments, compact, precise. Each ticket should be separated one from eachother by \n@@@@\n")
 
-	response, err := e.GPTClient.Chat(prompt + " " + reply)
+	response, err := e.GPTClient.Chat(reply + "\n" + replyPrompt)
 	if err != nil {
-		return fmt.Errorf("failed to process reply with GPT: %w", err)
+		return nil, fmt.Errorf("failed to process reply with GPT: %w", err)
 	}
 
-	//TODO add parsing and ticket creation for the gpt reply here
+	// After receiving the response from GPT that contains the tasks:
+	tasksParsed, err := parseTasksFromResponse(response)
+	if err != nil {
+		log.Printf("Error parsing tasks: %v", err)
+		return nil, fmt.Errorf("failed to parse tasks: %w", err)
+	}
 
-	return nil
+	var createdTickets []*trello.Card
+
+	// Get the list ID for the "Doing" column.
+	doingListID, err := e.TrelloClient.GetListIDByName("Doing")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Doing list ID: %w", err)
+	}
+
+	// Iterate through the parsed tasks and create a technical ticket for each.
+	for _, task := range tasksParsed {
+		// Create the ticket using the title and description.
+		techTicket, err := e.TrelloClient.CreateCard(task.Title, task.Description, doingListID)
+		if err != nil {
+			log.Printf("failed to create technical ticket for task '%s': %v", task.Title, err)
+			continue
+		}
+		createdTickets = append(createdTickets, techTicket)
+	}
+	return createdTickets, nil
+}
+
+// parseTasksFromResponse takes the GPT response and extracts tasks.
+// It splits the response on "\n@@@@\n" so that each block represents a task.
+// The first line of each block is taken as the title and the rest as the description.
+func parseTasksFromResponse(response string) ([]struct{ Title, Description string }, error) {
+	var tasks []struct{ Title, Description string }
+
+	// Split the response by the delimiter that separates tasks.
+	taskBlocks := strings.Split(response, "\n@@@@\n")
+	for _, block := range taskBlocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+
+		// Split the block into lines.
+		lines := strings.Split(block, "\n")
+		if len(lines) == 0 {
+			continue // Skip if no content is present.
+		}
+
+		// The first line is the title.
+		title := strings.TrimSpace(lines[0])
+		// The remaining lines (if any) are the description.
+		description := ""
+		if len(lines) > 1 {
+			description = strings.TrimSpace(strings.Join(lines[1:], "\n"))
+		}
+
+		tasks = append(tasks, struct{ Title, Description string }{
+			Title:       title,
+			Description: description,
+		})
+	}
+
+	return tasks, nil
 }
 
 // WaitForReply polls the ticket's comments until one is found that contains the required tag.
 func (e *EngineeringManagerAIAgent) WaitForReply(card *trello.Card, requiredTag string) (string, error) {
-	const pollInterval = 30 * time.Second
-	const maxAttempts = 10 // Adjust as needed
+	const pollInterval = 60 * time.Second
+	const maxAttempts = 100 // Adjust as needed
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		comments, err := e.ReadComments(card) // defined in the base agent
@@ -128,50 +176,23 @@ func (e *EngineeringManagerAIAgent) WaitForReply(card *trello.Card, requiredTag 
 	return "", fmt.Errorf("reply with tag %s not received after polling", requiredTag)
 }
 
-// SplitTicketIntoAtomicTasks takes a high-level ticket and splits it into atomic technical tasks.
-// It returns the newly created technical tickets (cards).
-func (e *EngineeringManagerAIAgent) SplitTicketIntoAtomicTasks(ticket *trello.Card) ([]*trello.Card, error) {
-	// 1. Use GPT to generate a list of atomic tasks.
-	prompt := fmt.Sprintf(
-		"Given the following technical specification, split it into a list of atomic technical tasks. "+
-			"Each task should be clear and unambiguous, with a concise title. \n\nSpecification:\n%s",
-		ticket.Desc)
-	response, err := e.GPTClient.Chat(prompt)
+// RespondToClarification generates a clarification response using ChatGPT and posts it as a comment.
+func (e *EngineeringManagerAIAgent) RespondToClarification(ticket *trello.Card, clarificationRequest string, backend *BackendDeveloperAIAgent) (string, error) {
+	// Build a prompt that includes the agent's instruction and the clarification request.
+	prompt := fmt.Sprintf("%s\nPlease provide a detailed clarification for the following request: %s", e.Instruction, clarificationRequest)
+
+	clarification, err := e.GPTClient.Chat(prompt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate atomic tasks: %w", err)
+		return "", fmt.Errorf("failed to generate clarification: %w", err)
 	}
 
-	// 2. Assume tasks are returned as a newline-separated list.
-	tasks := strings.Split(response, "\n")
-	var createdTickets []*trello.Card
-
-	// 3. Get the list ID for the "Doing" column.
-	doingListID, err := e.TrelloClient.GetListIDByName("Doing")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Doing list ID: %w", err)
+	// Construct the response comment tagging the backend agent.
+	responseComment := fmt.Sprintf("Engineering Manager Response: %s @%s", clarification, backend.Name)
+	if err := e.WriteComment(ticket, responseComment); err != nil {
+		return "", fmt.Errorf("failed to post clarification response: %w", err)
 	}
 
-	// 4. For each non-empty task, create a technical ticket.
-	for _, task := range tasks {
-		task = strings.TrimSpace(task)
-		if task == "" {
-			continue
-		}
-		title := "Technical: " + task
-		// Optionally, you could further refine the description here.
-		techTicket, err := e.TrelloClient.CreateCard(title, task, doingListID)
-		if err != nil {
-			// Log error and continue with next task.
-			log.Printf("failed to create technical ticket for task '%s': %v", task, err)
-			continue
-		}
-		createdTickets = append(createdTickets, techTicket)
-	}
-
-	if len(createdTickets) == 0 {
-		return nil, fmt.Errorf("no technical tickets were created")
-	}
-	return createdTickets, nil
+	return clarification, nil
 }
 
 // CreateTechnicalTicket generates a technical ticket based on a high-level ticket.

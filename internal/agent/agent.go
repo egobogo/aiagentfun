@@ -4,6 +4,7 @@ package agent
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 
 	"github.com/egobogo/aiagents/internal/gitrepo"
@@ -110,10 +111,58 @@ func (a *AIAgent) GetAssignedTickets() ([]*trello.Card, error) {
 		return nil, fmt.Errorf("failed to get cards: %w", err)
 	}
 	var assigned []*trello.Card
+	var needToRefreshContext = true
 	for _, card := range cards {
 		if a.TicketBelongsToMe(card) {
 			assigned = append(assigned, card)
+			if needToRefreshContext {
+				refreshErr := a.RefreshProjectContext()
+				log.Println("%s has just refreshed context ", a.Name)
+				if refreshErr != nil {
+					return nil, fmt.Errorf("failed to refresh context: %w", refreshErr)
+				}
+				needToRefreshContext = false
+			}
 		}
 	}
+	needToRefreshContext = true
 	return assigned, nil
+}
+
+// RefreshProjectContext reads the project’s folder structure and full file contents from Git,
+// and sends this information to the GPT agent to update its internal context without expecting a response.
+func (a *AIAgent) RefreshProjectContext() error {
+	// 1. Read all files from the Git repository.
+	files, err := a.ReadAllGitFiles()
+	if err != nil {
+		return fmt.Errorf("failed to read git files: %w", err)
+	}
+
+	// 2. Build a summary including folder structure, file locations, and full file contents.
+	var summaryBuilder strings.Builder
+	summaryBuilder.WriteString("Project Context Update:\n")
+	summaryBuilder.WriteString("The following is the project folder structure along with file locations and full file contents:\n\n")
+
+	for filePath, content := range files {
+		dir := filepath.Dir(filePath)
+		summaryBuilder.WriteString(fmt.Sprintf("File: %s\n", filePath))
+		summaryBuilder.WriteString(fmt.Sprintf("Location: %s\n", dir))
+		summaryBuilder.WriteString("Content:\n")
+		summaryBuilder.WriteString(content)
+		summaryBuilder.WriteString("\n----------------\n")
+	}
+
+	// 3. Create a prompt that instructs GPT to update its internal context without generating a response.
+	prompt := fmt.Sprintf(
+		"%s\n\nNote: This information is provided solely to actualise and update your internal understanding of the project structure and code base. No response or commentary is needed.",
+		summaryBuilder.String(),
+	)
+
+	// 4. Send the prompt to the GPT agent.
+	_, err = a.GPTClient.Chat(prompt)
+	if err != nil {
+		return fmt.Errorf("failed to update GPT context: %w", err)
+	}
+
+	return nil
 }

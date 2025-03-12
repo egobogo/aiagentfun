@@ -65,21 +65,17 @@ func main() {
 			for _, ticket := range tickets {
 				// Engineering Manager reads the ticket and writes comments if needed,
 				// waiting for manual approval or clarification via Trello comments.
-				if err := engManagerAgent.HandleTicket(ticket); err != nil {
+				techTickets, err := engManagerAgent.HandleTicket(ticket)
+				if err != nil {
 					log.Printf("Error handling ticket %s: %v", ticket.ID, err)
 					continue
 				}
 
-				// Once clarifications are acquired, create a technical ticket.
-				techTicket, err := engManagerAgent.CreateTechnicalTicket(ticket)
-				if err != nil {
-					log.Printf("Error creating technical ticket from %s: %v", ticket.ID, err)
-					continue
-				}
-
-				// Assign the technical ticket to the Backend Developer agent.
-				if err := engManagerAgent.AssignTicketToAgent(techTicket, backendAgent.Name); err != nil {
-					log.Printf("Error assigning technical ticket %s to developer: %v", techTicket.ID, err)
+				for _, techTicket := range techTickets {
+					// Assign the technical ticket to the Backend Developer agent.
+					if err := engManagerAgent.AssignTicketToAgent(techTicket, backendAgent.Name); err != nil {
+						log.Printf("Error assigning technical ticket %s to developer: %v", techTicket.ID, err)
+					}
 				}
 			}
 		} else {
@@ -97,27 +93,24 @@ func main() {
 			gitToken := os.Getenv("GIT_TOKEN")
 
 			for _, tkt := range techTickets {
-				// Backend Developer asks for at least one clarification from the Engineering Manager.
-				if err := backendAgent.RequestClarification(tkt); err != nil {
-					log.Printf("Error requesting clarification for ticket %s: %v", tkt.ID, err)
-					continue
+				// Backend Developer asks for a clarification from the Engineering Manager.
+				err := backendAgent.RequestDirectClarification(tkt, engManagerAgent)
+				if err != nil {
+					log.Printf("Error in direct clarification: %v", err)
 				}
-				// Wait (polling or blocking) until the Engineering Manager responds via Trello comments.
-				if err := backendAgent.WaitForClarificationResponse(tkt); err != nil {
-					log.Printf("Error waiting for clarification on ticket %s: %v", tkt.ID, err)
-					continue
-				}
+
 				// Execute the technical assignment: generate code, write tests.
-				if err := backendAgent.ExecuteTechnicalAssignment(tkt); err != nil {
+				comment, err := backendAgent.ExecuteTechnicalAssignment(tkt)
+				if err != nil {
 					log.Printf("Error executing technical assignment for ticket %s: %v", tkt.ID, err)
 					continue
 				}
 				// Commit the result to Git.
-				err := backendAgent.CommitAndPushTicketResult(tkt,
-					"Update ticket implementation", // commit message
-					"BackendBot",                   // author name
-					"backendbot@example.com",       // author email
-					gitUsername,                    // git username (from env or config)
+				err = backendAgent.CommitAndPushTicketResult(tkt,
+					comment,             // commit message
+					backendAgent.Name,   // author name
+					"egobogo@gmail.com", // author email
+					gitUsername,         // git username (from env or config)
 					gitToken)
 				if err != nil {
 					log.Printf("Error committing result for ticket %s: %v", tkt.ID, err)

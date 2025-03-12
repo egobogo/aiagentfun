@@ -3,8 +3,10 @@ package agent
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/egobogo/aiagents/internal/trello"
 )
@@ -30,36 +32,108 @@ func (b *BackendDeveloperAIAgent) GenerateCode(task string) (string, error) {
 	return b.GPTClient.Chat(prompt)
 }
 
-// RequestClarification posts a comment asking for clarification on the ticket.
-func (b *BackendDeveloperAIAgent) RequestClarification(ticket *trello.Card) error {
-	comment := "Requesting clarification on the technical details. Please provide more info, @engManagerAgent."
-	if err := b.WriteComment(ticket, comment); err != nil {
-		return fmt.Errorf("failed to request clarification: %w", err)
-	}
-	return nil
-}
-
-// ExecuteTechnicalAssignment generates Go code based on the ticket's description and writes it to a file.
-func (b *BackendDeveloperAIAgent) ExecuteTechnicalAssignment(ticket *trello.Card) error {
-	prompt := fmt.Sprintf("Generate production-ready Go code with tests for the following technical assignment:\n%s", ticket.Desc)
-	code, err := b.GPTClient.Chat(prompt)
+// RequestDirectClarification posts a clarification request on the ticket and directly
+// obtains a clarification response from the Engineering Manager agent.
+func (b *BackendDeveloperAIAgent) RequestDirectClarification(ticket *trello.Card, manager *EngineeringManagerAIAgent) error {
+	//Request clarification from GPT
+	prompt := fmt.Sprintf("Carefully study a technical assigment prepared by the engineering manager and ask clarifications if anything is not clear to you. Be precise in your questions, concrete, professional, don't ask obvious questions.:\n%s", ticket.Desc)
+	clarificationRequest, err := b.GPTClient.Chat(prompt)
 	if err != nil {
 		return fmt.Errorf("failed to generate code: %w", err)
 	}
-	// Use the ticket ID to generate a unique file name.
-	fileName := fmt.Sprintf("code_%s.go", ticket.ID)
-	if err := b.WriteToGit(fileName, []byte(code)); err != nil {
-		return fmt.Errorf("failed to write generated code to git: %w", err)
+
+	// Construct and post the clarification request comment.
+	requestComment := fmt.Sprintf("Backend Developer Request: %s @%s", clarificationRequest, manager.Name)
+	if err := b.WriteComment(ticket, requestComment); err != nil {
+		return fmt.Errorf("failed to post clarification request: %w", err)
 	}
+
+	// Directly call the manager's method to generate a clarification response.
+	response, err := manager.RespondToClarification(ticket, clarificationRequest, b)
+	if err != nil {
+		return fmt.Errorf("failed to obtain clarification response: %w", err)
+	}
+
+	log.Printf("Received clarification response: %s", response)
 	return nil
 }
 
-// CommitAndPushTicketResult commits all changes with a message and pushes them to the remote.
+// ExecuteTechnicalAssignment generates production-ready Go code based on the ticket's description,
+// expecting GPT to output the code in a strict format:
+//   - The first line is the full file path (including folder structure) wrapped in double exclamation marks
+//     (e.g. !!internal/agent/backend.go!!).
+//   - All subsequent lines contain only the Go code and comments.
+//
+// The function creates the folder structure if it does not already exist.
+func (b *BackendDeveloperAIAgent) ExecuteTechnicalAssignment(ticket *trello.Card) (string, error) {
+	// Create a prompt instructing GPT to follow the strict format.
+	prompt := fmt.Sprintf(
+		"Generate production-ready Go code with tests for the following technical assignment:\n%s\n"+
+			"It is crucial that the output strictly follows this format:\n"+
+			"1. The first line must be the full file path (including folder structure) wrapped in double exclamation marks (e.g. !!internal/agent/backend.go!!).\n"+
+			"2. All subsequent lines must be the Go code and comments only, with no additional text or explanations.",
+		ticket.Desc,
+	)
+
+	// Get the response from GPT.
+	response, err := b.GPTClient.Chat(prompt)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate code: %w", err)
+	}
+
+	// Split the response into lines.
+	lines := strings.Split(response, "\n")
+	if len(lines) < 2 {
+		return "", fmt.Errorf("GPT response is incomplete, expected at least a file path and code content")
+	}
+
+	// Validate and extract the file path from the first line.
+	filenameLine := strings.TrimSpace(lines[0])
+	if !strings.HasPrefix(filenameLine, "!!") || !strings.HasSuffix(filenameLine, "!!") {
+		return "", fmt.Errorf("invalid file path format in GPT response: %s", filenameLine)
+	}
+	// Remove the wrapping exclamation marks to extract the file path.
+	filePath := strings.Trim(filenameLine, "!")
+
+	// Ensure the target directory exists.
+	dir := filepath.Dir(filePath)
+	if dir != "." {
+		fullDirPath := filepath.Join(b.GitClient.RepoPath, dir)
+		if err := os.MkdirAll(fullDirPath, os.ModePerm); err != nil {
+			return "", fmt.Errorf("failed to create directory %s: %w", fullDirPath, err)
+		}
+	}
+
+	// Combine the remaining lines as the code content.
+	codeContent := strings.Join(lines[1:], "\n")
+
+	// Write the generated code to the Git repository using the full file path.
+	if err := b.WriteToGit(filePath, []byte(codeContent)); err != nil {
+		return "", fmt.Errorf("failed to write generated code to git: %w", err)
+	}
+
+	// Optionally, generate a commit message summarizing the changes.
+	commitPrompt := "Summarize the changes made for this commit in a concise message."
+	commitMessage, err := b.GPTClient.Chat(commitPrompt)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate commit message: %w", err)
+	}
+
+	return commitMessage, nil
+}
+
+// CommitAndPushTicketResult commits changes and pushes them to the remote repository.
 func (b *BackendDeveloperAIAgent) CommitAndPushTicketResult(ticket *trello.Card, commitMessage, authorName, authorEmail, gitUsername, gitToken string) error {
 	fullMessage := fmt.Sprintf("%s (Ticket: %s)", commitMessage, ticket.Name)
 	if err := b.GitClient.CommitChanges(fullMessage, authorName, authorEmail); err != nil {
 		return fmt.Errorf("failed to commit changes: %w", err)
 	}
+
+	// Pull changes to update local branch.
+	if err := b.GitClient.PullChanges(); err != nil {
+		log.Printf("Warning: pull failed, proceeding to push might result in a non-fast-forward error: %v", err)
+	}
+
 	if err := b.GitClient.PushChanges(gitUsername, gitToken); err != nil {
 		return fmt.Errorf("failed to push changes: %w", err)
 	}
@@ -80,32 +154,4 @@ func (b *BackendDeveloperAIAgent) CloseTicket(ticket *trello.Card, finalAssignee
 		return fmt.Errorf("failed to reassign ticket: %w", err)
 	}
 	return nil
-}
-
-// WaitForClarificationResponse polls the ticket's comments until a clarification response is found.
-// It assumes that the clarifying comment from the engineering manager will contain "@engManagerAgent".
-func (b *BackendDeveloperAIAgent) WaitForClarificationResponse(ticket *trello.Card) error {
-	const (
-		clarifierTag = "@engManagerAgent"
-		pollInterval = 30 * time.Second
-		maxAttempts  = 10 // Poll for up to 5 minutes (10 * 30 seconds)
-	)
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		comments, err := b.ReadComments(ticket)
-		if err != nil {
-			return fmt.Errorf("failed to read comments: %w", err)
-		}
-		// Check if any comment includes the clarifier tag.
-		for _, comment := range comments {
-			if strings.Contains(comment, clarifierTag) {
-				// Clarification response found.
-				return nil
-			}
-		}
-		// Wait before polling again.
-		time.Sleep(pollInterval)
-	}
-
-	return fmt.Errorf("clarification response not received within the expected time")
 }

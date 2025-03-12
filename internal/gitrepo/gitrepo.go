@@ -127,3 +127,19 @@ func (gc *GitClient) ReadAllFiles() (map[string]string, error) {
 	}
 	return filesContent, nil
 }
+
+// PullChanges fetches and merges changes from the remote branch.
+func (gc *GitClient) PullChanges() error {
+	worktree, err := gc.Repository.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %v", err)
+	}
+	err = worktree.Pull(&git.PullOptions{
+		RemoteName: "origin",
+	})
+	// If already up to date, return nil.
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("failed to pull changes: %v", err)
+	}
+	return nil
+}
