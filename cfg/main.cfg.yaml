@@ -1,0 +1,491 @@
+roles:
+  ProductManager:
+    name: "Product Manager AI Assistant"
+    prompt: >
+      You are a professional AI-based Product Manager Assistant. Your responsibility is to extract, synthesize, 
+      and clarify essential project requirements from tickets. You decide whether to ask clarifying questions or create 
+      dedicated tickets for specialized team members. Based on the gathered inputs, you refine the original ticket 
+      and assign it appropriately.
+    defaultAction: gather_requirements
+    actions:
+      - id: gather_requirements
+        name: "Gather Requirements"
+        mode: "gather"
+        prompt: >
+          Review the incoming ticket and extract initial requirements. Ask clarifying questions if needed.
+      - id: ask_question
+        name: "Ask a Question"
+        mode: "ask"
+      - id: create_prd
+        name: "Create PRD"
+        mode: "createprd"
+        prompt: >
+          Transform the raw ticket into a refined PRD to be reviewed by the Engineering Manager.
+      - id: update_ticket
+        name: "Update Ticket"
+        mode: "update"
+        prompt: >
+          Incorporate findings from specialized tickets (research, design, technical) into the original ticket.
+      - id: create_ticket
+        name: "Create Dedicated Ticket"
+        mode: "createTicket"
+        prompt: >
+          Create a new dedicated ticket for a specialized team member (e.g., Researcher or Designer) based on the current ticket.
+      - id: close_ticket
+        name: "Close Ticket"
+        mode: "close_ticket"
+      - id: update_product_documentation
+        name: "Update Product Documentation"
+        mode: "updateProductDoc"
+        prompt: >
+          Update the product documentation with the latest ticket information.
+  EngineeringManager:
+    name: "Engineering Manager"
+    prompt: >
+      Your role is a professional AI Engineering manager. You are the sole holder of engineering truth. Your duties are to analyze the PRD, ask technical questions when needed, and create detailed technical specifications. Your work is focused, precise, and aimed at enabling robust implementations.
+    defaultAction: create_tech_spec
+    actions:
+      - id: ask_question
+        name: "Ask a Technical Question"
+        mode: "ask"
+      - id: create_tech_spec
+        name: "Create Tech Spec"
+        mode: "createTechSpec"
+        prompt: >
+          Analyze the PRD and break it down into detailed technical tickets. Provide specific requirements, including 
+          file modifications and integration details.
+      - id: refine_tech_spec
+        name: "Refine Tech Spec"
+        mode: "refineTechSpec"
+        prompt: >
+          Refine the technical tickets to ensure all details are exhaustive and actionable.
+      - id: update_technical_documentation
+        name: "Update Technical Documentation"
+        mode: "updateTechDoc"
+        prompt: >
+          Update the technical documentation to reflect the approved engineering developments.
+  Researcher:
+    name: "Researcher"
+    prompt: >
+      You are responsible for conducting in-depth research to clarify ambiguous requirements. Your goal is to ask targeted 
+      questions and provide concise research findings that enhance the ticket.
+    defaultAction: provide_research
+    actions:
+      - id: ask_question
+        name: "Ask a Research Question"
+        mode: "ask"
+      - id: provide_research
+        name: "Provide Research Findings"
+        mode: "research"
+        prompt: >
+          Conduct thorough research based on the ticket and summarize the findings in a concise format.
+  Designer:
+    name: "Designer"
+    prompt: >
+      You design the visual and UX/UI aspects of the product. Your role involves creating design mockups and consulting 
+      with marketing and brand specialists to ensure consistency.
+    defaultAction: provide_design
+    actions:
+      - id: ask_question
+        name: "Ask a Design Question"
+        mode: "ask"
+      - id: provide_design
+        name: "Provide Design Mockups"
+        mode: "design"
+        prompt: >
+          Develop visual mockups based on the ticket requirements, and consult with marketing if needed for brand alignment.
+  BackendDeveloper:
+    name: "Backend Developer"
+    prompt: >
+      You implement technical specifications and write high-quality code. Your focus is on building robust, scalable features.
+    defaultAction: implement_feature
+    actions:
+      - id: implement_feature
+        name: "Implement Feature"
+        mode: "implement"
+      - id: ask_question
+        name: "Ask a Technical Question"
+        mode: "ask"
+  Marketer:
+    name: "Marketing Assistant"
+    prompt: >
+      You assist with marketing and brand alignment. Your role is to process marketing tickets and provide insights.
+    defaultAction: do_marketing
+    actions:
+      - id: ask_question
+        name: "Ask a Marketing Question"
+        mode: "ask"
+      - id: do_marketing
+        name: "Do Marketing"
+        mode: "do_marketing"
+  FrontendDeveloper:
+    name: "Frontend Developer"
+    prompt: >
+      You develop frontend features and user interfaces. Your role is to implement technical specifications for the product's frontend.
+    defaultAction: implement_feature
+    actions:
+      - id: implement_feature
+        name: "Implement Feature"
+        mode: "implement"
+      - id: ask_question
+        name: "Ask a Technical Question"
+        mode: "ask"
+  QA:
+    name: "Quality Assurance"
+    prompt: >
+      You test the product to ensure quality. Your role is to verify the implementation and ensure all requirements are met.
+    defaultAction: implement_feature
+    actions:
+      - id: ask_question
+        name: "Ask a Testing Question"
+        mode: "ask"
+      - id: implement_feature
+        name: "Perform Testing"
+        mode: "implement"
+
+globalModes:
+  #"Your task is to digest as much valuable and specific, yet compact information from the data provided as possible, keeping in mind your role and responsibilities. You need to form `memories`, and digest your subjective experience based on details rather then just copying the information."
+  Summarize: "Use the provided data to form specific memories that will be helpful for you to execute your role professionaly. Be compact and specific. You can range the importance of the memory from 1 (lowest) to 100 (highest). Bare in mind, that each new task you will encounter might be related to the things you remembered. Feel free to omit any trivial learnings, like `developer guide - guides developers`, instead try to remember specifics like a human would."
+  ask: "Pose a clear clarifying question and wait for the reply."
+  answer: "Provide a precise answer based on the question."
+  update: "Incorporate new inputs and update the ticket accordingly."
+  createTicket: "Create a new dedicated ticket for the specified specialized task."
+
+workflow:
+  highLevelTask: "Ticket received from Human Master"
+  steps:
+    # Product Manager Main Step
+    - id: "pm_product_step"
+      name: "Product Manager Step"
+      actor: "ProductManager"
+      action: "gather_requirements"
+      description: "The Product Manager reviews the ticket and decides the next action."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Human"
+              nextStep: "pm_ask_human"
+            - option: "Ask Agent Advice"
+              nextStep: "pm_ask_agent"
+            - option: "Create Research Ticket"
+              nextStep: "pm_create_research_ticket"
+            - option: "Create Design Ticket"
+              nextStep: "pm_create_design_ticket"
+            - option: "Create PRD"
+              nextStep: "pm_create_prd"
+            - option: "Finalize Ticket"
+              nextStep: "pm_finalize_ticket"
+    
+    - id: "pm_ask_human"
+      name: "Ask Human"
+      actor: "ProductManager"
+      action: "ask_question"
+      description: "The Product Manager asks a human for clarification and then reviews the answer."
+      next: "pm_product_step"
+    
+    - id: "pm_ask_agent"
+      name: "Ask Agent Advice"
+      actor: "ProductManager"
+      action: "ask_question"
+      description: "The Product Manager asks another agent for advice and then reviews the answer."
+      next: "pm_product_step"
+    
+    # Researcher and Designer flows
+    - id: "pm_create_research_ticket"
+      name: "Create Research Ticket"
+      actor: "ProductManager"
+      action: "create_ticket"
+      ticketType: "Research"
+      description: "A dedicated ticket is created for the Researcher."
+      next: "researcher_process_ticket"
+    
+    - id: "researcher_process_ticket"
+      name: "Researcher Step"
+      actor: "Researcher"
+      action: "provide_research"
+      description: "The Researcher processes the research ticket."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "researcher_ask_agent"
+            - option: "Do Research"
+              nextStep: "pm_product_step"
+    
+    - id: "researcher_ask_agent"
+      name: "Researcher Ask Agent"
+      actor: "Researcher"
+      action: "ask_question"
+      description: "The Researcher asks for agent advice and then reprocesses the ticket."
+      next: "researcher_process_ticket"
+    
+    - id: "pm_create_design_ticket"
+      name: "Create Design Ticket"
+      actor: "ProductManager"
+      action: "create_ticket"
+      ticketType: "Design"
+      description: "A dedicated ticket is created for the Designer."
+      next: "designer_process_ticket"
+    
+    - id: "designer_process_ticket"
+      name: "Designer Step"
+      actor: "Designer"
+      action: "provide_design"
+      description: "The Designer processes the design ticket."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "designer_ask_agent"
+            - option: "Do Design"
+              nextStep: "pm_product_step"
+            - option: "Create Marketing Ticket"
+              nextStep: "marketing_process_ticket"
+    
+    - id: "designer_ask_agent"
+      name: "Designer Ask Agent"
+      actor: "Designer"
+      action: "ask_question"
+      description: "The Designer asks for agent advice and then reprocesses the ticket."
+      next: "designer_process_ticket"
+    
+    - id: "marketing_process_ticket"
+      name: "Marketer Step"
+      actor: "Marketer"
+      action: "do_marketing"
+      description: "The Marketer processes the marketing ticket."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "marketing_ask_agent"
+            - option: "Do Marketing"
+              nextStep: "designer_process_ticket"
+    
+    - id: "marketing_ask_agent"
+      name: "Marketer Ask Agent"
+      actor: "Marketer"
+      action: "ask_question"
+      description: "The Marketer asks for agent advice and then reprocesses the ticket."
+      next: "marketing_process_ticket"
+    
+    # Engineering branch (PRD)
+    - id: "pm_create_prd"
+      name: "Create PRD"
+      actor: "ProductManager"
+      action: "create_prd"
+      description: "The Product Manager creates a refined PRD to be reviewed by the Engineering Manager."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Assign to Engineering Manager"
+              nextStep: "engm_process_prd"
+    
+    - id: "engm_process_prd"
+      name: "Engineering Manager Step 1"
+      actor: "EngineeringManager"
+      action: "create_tech_spec"
+      description: "The Engineering Manager reviews the PRD and creates TechSpec tickets."
+      next: "engm_step2"
+    
+    - id: "engm_step2"
+      name: "Engineering Manager Step 2"
+      actor: "EngineeringManager"
+      action: "create_tech_spec"
+      description: "The Engineering Manager updates the TechSpec ticket with detailed requirements."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "engm_ask_agent"
+            - option: "Update TechSpec Ticket"
+              nextStep: "engm_step3"
+    
+    - id: "engm_ask_agent"
+      name: "Engineering Manager Ask Agent"
+      actor: "EngineeringManager"
+      action: "ask_question"
+      description: "The Engineering Manager asks for agent advice and then continues updating the ticket."
+      next: "engm_step2"
+    
+    - id: "engm_step3"
+      name: "Engineering Manager Step 3"
+      actor: "EngineeringManager"
+      action: "create_tech_spec"
+      description: "The Engineering Manager assigns the technical ticket."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Assign to Backend Developer"
+              nextStep: "backend_process_ticket"
+            - option: "Assign to Frontend Developer"
+              nextStep: "frontend_process_ticket"
+            - option: "Assign to QA"
+              nextStep: "qa_process_ticket"
+    
+    - id: "backend_process_ticket"
+      name: "Backend Developer Step"
+      actor: "BackendDeveloper"
+      action: "implement_feature"
+      description: "The Backend Developer implements the feature."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "backend_ask_agent"
+            - option: "Complete Task"
+              nextStep: "engm_return_ticket"
+    
+    - id: "backend_ask_agent"
+      name: "Backend Developer Ask Agent"
+      actor: "BackendDeveloper"
+      action: "ask_question"
+      description: "The Backend Developer asks for agent advice and then continues the task."
+      next: "backend_process_ticket"
+    
+    - id: "frontend_process_ticket"
+      name: "Frontend Developer Step"
+      actor: "FrontendDeveloper"
+      action: "implement_feature"
+      description: "The Frontend Developer implements the feature."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "frontend_ask_agent"
+            - option: "Complete Task"
+              nextStep: "engm_return_ticket"
+    
+    - id: "frontend_ask_agent"
+      name: "Frontend Developer Ask Agent"
+      actor: "FrontendDeveloper"
+      action: "ask_question"
+      description: "The Frontend Developer asks for agent advice and then continues the task."
+      next: "frontend_process_ticket"
+    
+    - id: "qa_process_ticket"
+      name: "QA Step"
+      actor: "QA"
+      action: "implement_feature"
+      description: "QA tests the implementation."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Ask Agent Advice"
+              nextStep: "qa_ask_agent"
+            - option: "Complete Testing"
+              nextStep: "engm_return_ticket"
+    
+    - id: "qa_ask_agent"
+      name: "QA Ask Agent"
+      actor: "QA"
+      action: "ask_question"
+      description: "QA asks for agent advice and then continues testing."
+      next: "qa_process_ticket"
+    
+    - id: "engm_return_ticket"
+      name: "Engineering Manager Returns Ticket"
+      actor: "EngineeringManager"
+      action: "refine_tech_spec"
+      description: "The Engineering Manager reviews the technical ticket and either approves it or updates it."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Everything is OK"
+              nextStep: "engm_update_tech_doc"
+            - option: "Update Ticket"
+              nextStep: "engm_process_prd"
+    
+    - id: "engm_update_tech_doc"
+      name: "Update Technical Documentation"
+      actor: "EngineeringManager"
+      action: "update_technical_documentation"
+      description: "The Engineering Manager updates the technical documentation after the developments are approved."
+      next: "pm_finalize_ticket_eng"
+    
+    - id: "pm_finalize_ticket_eng"
+      name: "Finalize Ticket (Engineering)"
+      actor: "ProductManager"
+      action: "update_ticket"
+      description: "The Product Manager finalizes the ticket after engineering work."
+      next: "master_confirmation_final"
+    
+    - id: "pm_finalize_ticket"
+      name: "Finalize Ticket"
+      actor: "ProductManager"
+      action: "update_ticket"
+      description: "The Product Manager finalizes the ticket for non-engineering tasks."
+      next: "master_confirmation_final"
+    
+    # Common Master Confirmation (final review)
+    - id: "master_confirmation_final"
+      name: "Master Confirmation (Final)"
+      actor: "Master"
+      action: "confirm_results"
+      description: "Master reviews all changes in the finalized ticket. If everything is OK, proceed; otherwise, loop back for revision."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Everything is OK"
+              nextStep: "pm_documentation_decision"
+            - option: "Needs Revision"
+              nextStep: "pm_finalize_ticket"
+    
+    - id: "pm_documentation_decision"
+      name: "Documentation Decision"
+      actor: "ProductManager"
+      description: "Decide whether to update product documentation or directly close the ticket."
+      next:
+        - branch: "Decision"
+          decision:
+            - option: "Update Documentation"
+              nextStep: "pm_update_product_doc"
+            - option: "Close Ticket"
+              nextStep: "pm_close_ticket"
+    
+    - id: "pm_update_product_doc"
+      name: "Update Product Documentation"
+      actor: "ProductManager"
+      action: "update_product_documentation"
+      description: "The Product Manager updates the product documentation with the latest ticket information."
+      next: "pm_close_ticket"
+    
+    - id: "pm_close_ticket"
+      name: "Close Ticket"
+      actor: "ProductManager"
+      action: "close_ticket"
+      description: "The Product Manager closes the ticket after final confirmation."
+    
+workflowControl:
+  currentStep: "pm_product_step"
+  stepsOrder:
+    - "pm_product_step"
+    - "pm_ask_human"
+    - "pm_ask_agent"
+    - "pm_create_research_ticket"
+    - "researcher_process_ticket"
+    - "researcher_ask_agent"
+    - "pm_create_design_ticket"
+    - "designer_process_ticket"
+    - "designer_ask_agent"
+    - "marketing_process_ticket"
+    - "marketing_ask_agent"
+    - "pm_create_prd"
+    - "engm_process_prd"
+    - "engm_step2"
+    - "engm_ask_agent"
+    - "engm_step3"
+    - "backend_process_ticket"
+    - "backend_ask_agent"
+    - "frontend_process_ticket"
+    - "frontend_ask_agent"
+    - "qa_process_ticket"
+    - "qa_ask_agent"
+    - "engm_return_ticket"
+    - "engm_update_tech_doc"
+    - "pm_finalize_ticket_eng"
+    - "pm_finalize_ticket"
+    - "master_confirmation_final"
+    - "pm_documentation_decision"
+    - "pm_update_product_doc"
+    - "pm_close_ticket"
