@@ -1,10 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/joho/godotenv"
 
@@ -45,7 +44,7 @@ func main() {
 	}
 	notionToken := os.Getenv("NOTION_TOKEN")
 	if notionToken == "" {
-		log.Println("NOTION_API_KEY not set")
+		log.Println("NOTION_TOKEN not set")
 	}
 	notionParent := os.Getenv("NOTION_PARENT_PAGE")
 	if notionParent == "" {
@@ -64,10 +63,20 @@ func main() {
 	// Create the Docs client using Notion.
 	docsClient := notion.NewNotionClient(notionToken, notionParent)
 
-	// Create the Git client (assuming current directory is a valid git repo).
-	gitClient, err := gitrepo.NewGitClient(os.Getenv("GIT_REPO_URL"), os.Getenv("GIT_RE    PO_PATH"))
+	// Use the correct environment variable name for the Git repository path.
+	repoPath := strings.TrimSpace(os.Getenv("GIT_REPO_PATH"))
+	repoURL := os.Getenv("GIT_REPO_URL")
+	if repoPath == "" || repoURL == "" {
+		log.Println("GIT_REPO_PATH or GIT_REPO_URL not set")
+	}
+
+	// Create the Git client (this will open the existing repository if it already exists).
+	gitClient, err := gitrepo.NewGitClient(repoURL, repoPath)
 	if err != nil {
-		log.Println("Failed to create GitClient: %v", err)
+		// Log error using proper formatting.
+		log.Printf("Failed to create GitClient: %v", err)
+	} else {
+		log.Println("GitClient created successfully")
 	}
 
 	// Create a board client if Trello credentials are provided; otherwise, leave it nil.
@@ -75,7 +84,6 @@ func main() {
 
 	// Create context storage with concrete implementations:
 	// OpenAIEmbeddingProvider (for embeddings) and HNSWSimilaritySearcher.
-	// We assume the embedding model "text-embedding-ada-002" returns a 1536-dimension vector.
 	embeddingProvider := openai.NewOpenAIEmbeddingProvider(openaiAPIKey, "text-embedding-ada-002")
 	hnswSearcher, err := hnsw.New(1536)
 	if err != nil {
@@ -97,26 +105,5 @@ func main() {
 
 	// Create the Engineering Manager agent.
 	engAgent := agent.NewEngineeringManagerAgent(baseAgent)
-
-	// After context creation, print the hot context to stdout.
-	hotContext := engAgent.Context.GetContext()
-	fmt.Println("Hot Context:")
-	fmt.Println(hotContext)
-
-	// Retrieve the memory records (cold storage) as a JSON string.
-	memoriesJSON, err := engAgent.Context.GetMemories()
-	if err != nil {
-		log.Println("Failed to get memories: %v", err)
-	}
-
-	// Write the memory records to a file in the "logs" directory.
-	logsDir := "logs"
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		log.Println("Failed to create logs directory: %v", err)
-	}
-	logFilePath := filepath.Join(logsDir, "agent_memories.json")
-	if err := os.WriteFile(logFilePath, []byte(memoriesJSON), 0644); err != nil {
-		log.Println("Failed to write memories to file: %v", err)
-	}
-	fmt.Printf("Memory records written to: %s\n", logFilePath)
+	log.Println(engAgent.Name)
 }

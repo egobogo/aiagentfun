@@ -8,7 +8,9 @@ import (
 	"github.com/egobogo/aiagents/internal/context"
 	"github.com/egobogo/aiagents/internal/docs"
 	"github.com/egobogo/aiagents/internal/gitrepo"
+	"github.com/egobogo/aiagents/internal/model"
 	mclient "github.com/egobogo/aiagents/internal/model"
+	"github.com/egobogo/aiagents/internal/model/chatgpt/vectorstorage"
 	pb "github.com/egobogo/aiagents/internal/promptbuilder"
 )
 
@@ -18,7 +20,7 @@ type Agent interface {
 	FindMyTickets() ([]board.Card, error)
 	Think(senderContext, userInput, mode string, desiredOutput interface{}) (mclient.Message, error)
 	Answer(senderContext, userInput string, desiredOutput interface{}) (mclient.Message, error)
-	Summarize(inputStr string, inputSchema interface{}) ([]context.EasyMemory, error)
+	CreateThoughts(userInput string, attachments []model.FileAttachment, webSearch *model.WebSearch) ([]context.EasyMemory, error)
 	createContext() error
 }
 
@@ -34,6 +36,7 @@ type BaseAgent struct {
 	GitClient     *gitrepo.GitClient
 	Context       context.ContextStorage
 	PromptBuilder pb.PromptBuilder
+	VectorStorage *vectorstorage.Client
 }
 
 // FindMyTickets retrieves board cards assigned to this agent.
@@ -44,7 +47,7 @@ func (a *BaseAgent) FindMyTickets() ([]board.Card, error) {
 // Think builds a request, obtains a response, and updates context.
 func (a *BaseAgent) Think(senderContext, userInput, mode string, desiredOutput interface{}) (mclient.Message, error) {
 	combinedInput := fmt.Sprintf("Context of the sender:\n%s\n\nThe query of the sender:\n%s", senderContext, userInput)
-	newMemories, err := a.Summarize(combinedInput, nil)
+	newMemories, err := a.CreateThoughts(combinedInput, nil, nil)
 	if err != nil {
 		return mclient.Message{}, fmt.Errorf("failed to summarize new input: %w", err)
 	}
@@ -81,7 +84,7 @@ func (a *BaseAgent) Think(senderContext, userInput, mode string, desiredOutput i
 		return mclient.Message{}, fmt.Errorf("failed to get task response: %w", err)
 	}
 
-	additionalMemories, err := a.Summarize(taskResponse, nil)
+	additionalMemories, err := a.CreateThoughts(taskResponse, nil, nil)
 	if err != nil {
 		fmt.Printf("Warning: failed to summarize task response for additional memories: %v\n", err)
 		additionalMemories = []context.EasyMemory{}
@@ -103,13 +106,25 @@ func (a *BaseAgent) Answer(senderContext, userInput string, desiredOutput interf
 	return a.Think(senderContext, userInput, "Answer", desiredOutput)
 }
 
-// Summarize requests a structured output of memories and unmarshals it into []EasyMemory.
-func (a *BaseAgent) Summarize(inputStr string, inputSchema interface{}) ([]context.EasyMemory, error) {
+// CreateThoughts requests a structured output of memories and unmarshals it into []EasyMemory.
+func (a *BaseAgent) CreateThoughts(userInput string, attachments []model.FileAttachment, webSearch *model.WebSearch) ([]context.EasyMemory, error) {
 	var userPrompt string
-	if inputSchema != nil {
-		userPrompt = fmt.Sprintf("Your task is to produce an array of memories from the information provided, given your role. Input:\n%s\nSchema: %v", inputStr, inputSchema)
+	// If attachments are provided, extract the unique vector store IDs.
+	var vectorStoreIDs []string
+	if len(attachments) > 0 {
+		vectorStoreSet := make(map[string]struct{})
+		files := make([]string, 0)
+		for _, att := range attachments {
+			vectorStoreSet[att.VectorStoreID] = struct{}{}
+			files = append(files, att.FileID)
+		}
+		for vsID := range vectorStoreSet {
+			vectorStoreIDs = append(vectorStoreIDs, vsID)
+		}
+		userPrompt = fmt.Sprintf("Study the followig files before executing a task.\n%v\n%s", files, userInput)
+
 	} else {
-		userPrompt = fmt.Sprintf("Your task is to produce an array of memories from the information provided, given your role. Input:\n%s", inputStr)
+		userPrompt = userInput
 	}
 
 	// Pass an empty slice to trigger dynamic schema generation for []EasyMemory.
@@ -128,12 +143,26 @@ func (a *BaseAgent) Summarize(inputStr string, inputSchema interface{}) ([]conte
 		return nil, fmt.Errorf("failed to build chat request: %w", err)
 	}
 
+	if len(vectorStoreIDs) > 0 {
+		// Attach the file search tool block to the ChatRequest.
+		if err := a.PromptBuilder.AddFile(&chatReq, vectorStoreIDs); err != nil {
+			return nil, fmt.Errorf("failed to add file tool: %w", err)
+		}
+	}
+
+	// If a web search configuration is provided, attach it.
+	if webSearch != nil {
+		if err := a.PromptBuilder.AddWeb(&chatReq, *webSearch); err != nil {
+			return nil, fmt.Errorf("failed to add web search tool: %w", err)
+		}
+	}
+
 	// Unmarshal into a wrapper struct with a "result" field.
 	var wrapper struct {
 		Result []context.EasyMemory `json:"result"`
 	}
 	if err := a.ModelClient.ChatAdvancedParsed(chatReq, &wrapper); err != nil {
-		return nil, fmt.Errorf("failed to parse structured JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse CreateThoughts response: %w", err)
 	}
 
 	return wrapper.Result, nil
@@ -177,6 +206,9 @@ func (a *BaseAgent) RefreshMemories(oldMems []context.MemoryEntry, newMems []con
 	newJSON, err := json.MarshalIndent(newMems, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal new memories: %w", err)
+	}
+	if len(oldMems) == 0 {
+		return nil
 	}
 
 	prompt := fmt.Sprintf("Old Memories:\n%s\nNew Memories:\n%s", string(oldJSON), string(newJSON))

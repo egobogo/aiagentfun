@@ -2,7 +2,6 @@
 package inmemory
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -119,15 +118,15 @@ func (m *InMemoryContextStorage) GetContext() string {
 }
 
 // GetMemories returns the entire cold storage as a pretty-printed JSON string.
-func (m *InMemoryContextStorage) GetMemories() (string, error) {
+func (m *InMemoryContextStorage) GetMemories() []context.MemoryEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// Convert coldStorage map to JSON
-	data, err := json.MarshalIndent(m.coldStorage, "", "  ")
-	if err != nil {
-		return "", err
+	var memorySlice []context.MemoryEntry
+
+	for _, mem := range m.coldStorage {
+		memorySlice = append(memorySlice, mem)
 	}
-	return string(data), nil
+	return memorySlice
 }
 
 // SearchMemories computes an embedding for the query text and uses the injected SimilaritySearcher
@@ -137,9 +136,13 @@ func (s *InMemoryContextStorage) SearchMemories(query string) []context.MemoryEn
 	if err != nil {
 		return nil
 	}
-	results, err := s.simSearcher.Search(emb, 10, 0.8)
+	results, err := s.simSearcher.Search(emb, 10, 0.1)
 	if err != nil {
 		return nil
+	}
+	// Remove embeddings from each memory.
+	for i := range results {
+		results[i].Embedding = nil
 	}
 	return results
 }

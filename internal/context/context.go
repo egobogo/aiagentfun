@@ -25,7 +25,7 @@ type ContextStorage interface {
 	Forget(ID string) error
 	SetContext(summary string) error
 	GetContext() string
-	GetMemories() (string, error)
+	GetMemories() []MemoryEntry
 	SearchMemories(query string) []MemoryEntry
 	FilterRelatedMemories(newMems []EasyMemory) []MemoryEntry
 	MemoryExists(id string) bool

@@ -1,3 +1,4 @@
+// File: cmd/manual_workflow.go
 package main
 
 import (
@@ -14,7 +15,7 @@ import (
 )
 
 func main() {
-	// Load configuration from YAML file.
+	// Load configuration from the absolute or relative path (adjust as needed)
 	prov, err := filesys.NewFilesysConfigProvider("cfg/main.cfg.yaml")
 	if err != nil {
 		log.Fatalf("Could not create config provider: %v", err)
@@ -26,36 +27,31 @@ func main() {
 
 	// Create a new workflow manager using the loaded configuration.
 	wm := workflow.NewWorkflowManager(config.GetLoadedConfig())
+
 	reader := bufio.NewReader(os.Stdin)
-
-	wm.SetCurrentStep("pm_product_step")
-
 	for {
 		current, err := wm.CurrentStep()
 		if err != nil {
 			log.Fatalf("Error getting current step: %v", err)
 		}
-		fmt.Printf("\nCurrent step: %s\nDescription: %s\n", current.Name, current.Description)
+		fmt.Printf("\nCurrent Step: %s\nDescription: %s\n", current.Name, current.Description)
 
-		// Check if this is the final step.
+		// If the current action indicates completion, exit.
 		if strings.ToLower(current.Action) == "close_ticket" {
 			fmt.Println("Workflow complete. Ticket closed.")
 			break
 		}
 
-		// Get the unified next choices.
+		// Display next choices.
 		choices, err := wm.NextChoices()
 		if err != nil {
 			log.Fatalf("Error getting next choices: %v", err)
 		}
-
-		// Display the next choices.
 		fmt.Println("Next choices:")
-		for i, c := range choices {
-			fmt.Printf("  %d) %s (Next Step: %s, Action: %s)\n", i+1, c.Option, c.NextStep, c.Action)
+		for i, choice := range choices {
+			fmt.Printf("  %d) %s (Next Step: %s, Action: %s)\n", i+1, choice.Option, choice.NextStep, choice.Action)
 		}
 
-		// Prompt the user for a selection.
 		fmt.Print("Enter your choice: ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
@@ -69,9 +65,8 @@ func main() {
 		}
 
 		// Advance to the chosen step.
-		selectedNext := choices[choice-1].NextStep
-		if err := wm.NextStep(selectedNext); err != nil {
-			fmt.Printf("Error advancing to step: %v\n", err)
+		if err := wm.NextStep(choices[choice-1].NextStep); err != nil {
+			log.Fatalf("Error advancing to step: %v", err)
 		}
 	}
 }

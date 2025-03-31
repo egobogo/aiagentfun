@@ -87,7 +87,7 @@ func (b *ChatGPTPromptBuilder) Build(role, mode, state, userInput string, desire
 		Content: []map[string]string{
 			{
 				"type": "input_text",
-				"text": fmt.Sprintf("%s\n%s\nStructured memory:\n%s", projectGoal, roleInstruction, state),
+				"text": fmt.Sprintf("The project you are working on:%s\nYour role in the project is:%s\n", projectGoal, roleInstruction),
 			},
 		},
 	}
@@ -107,7 +107,7 @@ func (b *ChatGPTPromptBuilder) Build(role, mode, state, userInput string, desire
 		Content: []map[string]string{
 			{
 				"type": "input_text",
-				"text": userInput,
+				"text": fmt.Sprintf("The things that you currently know are:\n%s\nInput is:\n%s", state, userInput),
 			},
 		},
 	}
@@ -115,7 +115,7 @@ func (b *ChatGPTPromptBuilder) Build(role, mode, state, userInput string, desire
 	chatReq := model.ChatRequest{
 		Model:       modelName,
 		Input:       []model.Message{systemMsg, developerMsg, userMsg},
-		Temperature: 1.2,
+		Temperature: 0.8,
 	}
 
 	if desiredOutput != nil {
@@ -159,4 +159,27 @@ func (b *ChatGPTPromptBuilder) Build(role, mode, state, userInput string, desire
 		}
 	}
 	return chatReq, nil
+}
+
+func (b *ChatGPTPromptBuilder) AddFile(chatReq *model.ChatRequest, vectorStoreIDs []string) error {
+	if chatReq == nil {
+		return fmt.Errorf("chat request is nil")
+	}
+	// Create a tool block for file_search using only the vector_store_ids.
+	toolBlock := map[string]interface{}{
+		"type":             "file_search",
+		"vector_store_ids": vectorStoreIDs,
+	}
+	chatReq.Tools = append(chatReq.Tools, toolBlock)
+	return nil
+}
+
+// AddWeb attaches a web search tool block to the ChatRequest using the provided WebSearchTool configuration.
+func (b *ChatGPTPromptBuilder) AddWeb(chatReq *model.ChatRequest, webTool model.WebSearch) error {
+	if chatReq == nil {
+		return fmt.Errorf("chat request is nil")
+	}
+	// Append the webTool struct directly to the Tools field.
+	chatReq.Tools = append(chatReq.Tools, webTool)
+	return nil
 }

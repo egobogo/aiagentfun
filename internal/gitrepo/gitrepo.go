@@ -173,3 +173,104 @@ func (g *GitClient) GatherRepoInfo() (string, interface{}, error) {
 
 	return string(repoJSONBytes), schema, nil
 }
+
+// PullChanges pulls the latest changes from the remote repository.
+func (g *GitClient) PullChanges(username, token string) error {
+	worktree, err := g.Repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	err = worktree.Pull(&git.PullOptions{
+		RemoteName: "origin",
+		Auth: &http.BasicAuth{
+			Username: username,
+			Password: token,
+		},
+	})
+	// If there are no changes to pull, go-git returns an error message "already up-to-date"
+	if err != nil && err.Error() == "already up-to-date" {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to pull changes: %w", err)
+	}
+	return nil
+}
+
+// ListCodeFiles returns a slice of paths for all code files in the repository.
+// Allowed extensions can be adjusted as needed.
+func (g *GitClient) ListCodeFiles() ([]string, error) {
+	allowedExtensions := []string{".go", ".py", ".js", ".ts", ".java", ".rb", ".cs", ".cpp", ".c", ".md"}
+	var files []string
+	err := filepath.Walk(g.RepoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip .git and vendor directories.
+		if info.IsDir() {
+			if info.Name() == ".git" || info.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := filepath.Ext(info.Name())
+		for _, allowed := range allowedExtensions {
+			if strings.EqualFold(ext, allowed) {
+				files = append(files, path)
+				break
+			}
+		}
+		return nil
+	})
+	return files, err
+}
+
+// PrintTree returns a string representation of the repository's file tree,
+// including only directories and code files.
+func (g *GitClient) PrintTree() (string, error) {
+	allowedExtensions := []string{".go", ".py", ".js", ".ts", ".java", ".rb", ".cs", ".cpp", ".c", ".md"}
+	var treeLines []string
+
+	err := filepath.Walk(g.RepoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip vendor and .git directories
+		if info.IsDir() && (info.Name() == ".git" || info.Name() == "vendor") {
+			return filepath.SkipDir
+		}
+
+		// Get relative path from repository root
+		relPath, err := filepath.Rel(g.RepoPath, path)
+		if err != nil {
+			return err
+		}
+
+		// If it's a file, only include if it has an allowed extension.
+		if !info.IsDir() {
+			ext := filepath.Ext(info.Name())
+			allowed := false
+			for _, a := range allowedExtensions {
+				if strings.EqualFold(ext, a) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return nil
+			}
+		}
+
+		// Compute indentation based on depth (number of path separators).
+		depth := strings.Count(relPath, string(os.PathSeparator))
+		indent := strings.Repeat("  ", depth)
+		treeLines = append(treeLines, fmt.Sprintf("%s%s", indent, info.Name()))
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return strings.Join(treeLines, "\n"), nil
+}
